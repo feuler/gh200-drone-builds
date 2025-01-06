@@ -1,7 +1,11 @@
 # Build process - gh200 with pytorch uvm patch
 
+## docker build examples with "Drone + Gitea" for gh200 pytorch (with uvm), torchvision, triton, xformers
+
+### Steps
+
 1. build pytorch version required for vllm version
-    - apply gh200 uvm patch before build
+    - apply gh200 uvm patch before build (https://github.com/feuler/gh200-pytorch/tree/v2.5.1)
 2. build torchvision version matching the torch version with the custom built torch pre-installed
 3. build xformers (optional) with custom torch and torchvision whl packages pre-installed
 4. build triton
