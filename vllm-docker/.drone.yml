@@ -1,0 +1,71 @@
+kind: pipeline
+type: docker
+name: build-vllm
+
+platform:
+  os: linux
+  arch: arm64
+
+steps:
+  - name: prepare-dockerfile
+    image: nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
+    settings:
+      platform:
+        - linux/arm64
+    commands:     
+      # Create Dockerfile for the final image
+      - |
+        cat > Dockerfile << 'EOF'
+        FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
+        
+        # Install Python and pip
+        RUN apt-get update && \
+            apt-get install -y python3.11 python3-pip libjpeg8 libpng16-16 && \
+            apt-get clean && \
+            rm -rf /var/lib/apt/lists/* && \
+            update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 && \
+            update-alternatives --set python3 /usr/bin/python3.11 && \
+            update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 && \
+            update-alternatives --set python /usr/bin/python3.11
+        
+        # Upgrade pip and install packages
+        RUN python3 -m pip install --upgrade pip && \
+            pip3 install https://server.example.com/builds/vision/releases/download/v0.20.1/torchvision-0.20.1-cp311-cp311-linux_aarch64.whl \
+            https://server.example.com/builds/pytorch/releases/download/v2.5.1/torch-2.5.1-cp311-cp311-linux_aarch64.whl \
+            https://server.example.com/builds/xformers/releases/download/v0.0.28.post3-torch251/xformers-0.0.29+f3bc7a78.d20241231-cp311-cp311-linux_aarch64.whl \
+            https://server.example.com/builds/triton/releases/download/v3.1.0/triton-3.1.0-cp311-cp311-linux_aarch64.whl \
+            https://server.example.com/builds/vllm/releases/download/v0.6.6.post1-torch251/vllm-0.6.6.post2.dev0+g2339d59f.d20241231.cu124-cp311-cp311-linux_aarch64.whl \
+            llmcompressor && \
+            pip3 uninstall -y pynvml && \
+            pip3 install -U --force nvidia-ml-py
+        
+        ENTRYPOINT ["python3", "-m", "vllm.entrypoints.openai.api_server"]
+        EOF
+
+  - name: build-and-push-to-registry
+    image: plugins/docker
+    settings:
+      platform:  
+        - linux/arm64
+      repo: server.example.com:5001/vllm
+      registry: server.example.com:5001
+      tags: 0.6.6.post1-torch251
+      dockerfile: Dockerfile
+      force_tag: true
+      insecure: true
+    volumes:
+      - name: docker_sock
+        path: /var/run/docker.sock
+
+volumes:
+  - name: docker_sock
+    host:
+      path: /var/run/docker.sock
+
+trigger:
+  branch:
+    exclude:
+    - main
+
+  event:
+    - push

@@ -1,0 +1,78 @@
+kind: pipeline
+type: docker
+name: build-python-whl-arm64
+
+platform:
+  os: linux
+  arch: arm64
+
+steps:
+  - name: setup-binfmt
+    image: tonistiigi/binfmt:latest
+    privileged: true
+    settings:
+      install: true
+
+  - name: build-whl
+    image: nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
+    settings:
+      platform:
+        - linux/arm64
+    environment:
+      DOCKER_PLATFORM: linux/arm64
+      DEBIAN_FRONTEND: noninteractive
+    commands:
+      # Update and install required dependencies
+      - apt-get update && apt-get install -y git python3.11 python3.11-venv python3.11-dev python3-pip build-essential zlib1g-dev ffmpeg libavutil-dev libavcodec-dev libavformat-dev libavdevice-dev libavfilter-dev libswscale-dev libswresample-dev libswresample-dev libpostproc-dev libjpeg-dev libpng-dev
+
+      # Clone the target repository
+      - git clone https://github.com/pytorch/vision.git
+      - cd vision
+      - git checkout v0.20.1
+      - git submodule sync
+      - git submodule update --init --recursive
+
+      - export BUILD_VERSION=0.20.1
+
+      # Create and activate a Python virtual environment
+      - python3.11 -m venv venv
+      - . venv/bin/activate
+
+      - export _GLIBCXX_USE_CXX11_ABI=1
+      ## export correct CUDA path if not set (/usr/local/cuda version set by "update-alternatives --config cuda")
+      - export CUDA_HOME=/usr/local/cuda
+      ##export USE_PRIORITIZED_TEXT_FOR_LD=1
+      
+      # Upgrade pip and install required tools in the venv
+      - pip3 install --upgrade pip setuptools wheel ninja cmake numpy scapy cython
+
+      # override torch from requirements with torch uvm build
+      - pip3 install https://server.example.com/builds/pytorch/releases/download/v2.5.1/torch-2.5.1-cp311-cp311-linux_aarch64.whl
+
+      # Build the .whl file
+      - MAX_JOBS=4 python3.11 setup.py bdist_wheel
+
+      # Organize the built .whl files for ARM64
+      - mkdir -p ../dist/arm64
+      - mv dist/*.whl ../dist/arm64/
+
+  - name: upload-release
+    image: plugins/gitea-release
+    settings:
+      base_url: https://server.example.com
+      api_key:
+        from_secret: api_token_gitea
+      files: dist/arm64/*.whl
+      checksum: sha256
+      title: "ARM64 Python Wheels with CUDA"
+      note: "Automated build using nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04 for ARM64 architecture."
+      draft: false
+
+trigger:
+  event:
+    - tag
+
+when:
+  ref:
+    include:
+      - refs/tags/*

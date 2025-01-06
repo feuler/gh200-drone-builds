@@ -1,0 +1,109 @@
+kind: pipeline
+type: docker
+name: build-python-whl-arm64
+
+platform:
+  os: linux
+  arch: arm64
+
+steps:
+  - name: setup-binfmt
+    image: tonistiigi/binfmt:latest
+    privileged: true
+    settings:
+      install: true
+
+  - name: build-whl
+    image: nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
+    settings:
+      platform:
+        - linux/arm64
+    environment:
+      DOCKER_PLATFORM: linux/arm64
+      DEBIAN_FRONTEND: noninteractive
+    commands:
+      # Update and install required dependencies
+      - apt-get update && apt-get install -y git python3.11 python3.11-venv python3.11-dev python3-pip build-essential cmake curl
+
+      # Clone and both triton and llvm
+      - git clone https://github.com/triton-lang/triton.git
+      - git clone https://github.com/llvm/llvm-project.git
+
+      - cd triton
+      # Checkout triton 3.1.0 version for pytorch 2.5.1
+      - git checkout 5fe38ffd
+      - cd ..
+      # Get current llvm checkout has for triton
+      - llvm_hash=$(cut -c1-8 < triton/cmake/llvm-hash.txt)
+
+      # build llvm
+      - cd llvm-project
+      # checkout required commit for triton version
+      - git checkout $llvm_hash
+      - git submodule sync
+      - git submodule update --init --recursive
+      # Create and activate a Python virtual environment
+      - python3.11 -m venv venv
+      - . venv/bin/activate 
+      # override torch from requirements with torch uvm build
+      - pip3 install https://server.example.com/builds/pytorch/releases/download/v2.5.1/torch-2.5.1-cp311-cp311-linux_aarch64.whl
+      # build llvm for arm64
+      - pip3 install numpy pybind11 ninja
+      - mkdir build
+      - cd build
+      - cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON ../llvm -DLLVM_ENABLE_PROJECTS="mlir;llvm" -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
+      - ninja
+      - export LLVM_INCLUDE_DIRS=`pwd`/include
+      - export LLVM_LIBRARY_DIR=`pwd`/lib
+      - export LLVM_SYSPATH=`pwd`
+      - cd ../..
+
+      # build the triton repository
+      - cd triton
+      - git submodule sync
+      - git submodule update --init --recursive
+
+      # Create and activate a Python virtual environment
+      - python3.11 -m venv venv
+      - . venv/bin/activate
+
+      - export _GLIBCXX_USE_CXX11_ABI=1
+      ## export correct CUDA path if not set (/usr/local/cuda version set by "update-alternatives --config cuda")
+      - export CUDA_HOME=/usr/local/cuda
+      ##export USE_PRIORITIZED_TEXT_FOR_LD=1
+      
+      # Upgrade pip and install required tools in the venv
+      - pip3 install --upgrade pip setuptools wheel ninja numpy pybind11
+
+      # override torch from requirements with torch uvm build
+      - pip3 install https://server.example.com/builds/pytorch/releases/download/v2.5.1/torch-2.5.1-cp311-cp311-linux_aarch64.whl
+
+      # Build the triton .whl file
+      - cd python
+      # Build wheel
+      - MAX_JOBS=4 python3.11 setup.py bdist_wheel
+
+      # Organize the built .whl files for ARM64
+      - mkdir -p ../../dist/arm64
+      - mv dist/*.whl ../../dist/arm64/
+
+  - name: upload-release
+    image: plugins/gitea-release
+    settings:
+      base_url: https://server.example.com
+      api_key:
+        from_secret: api_token_gitea
+      files: dist/arm64/*.whl
+      checksum: sha256
+      title: "ARM64 Python Wheels with CUDA"
+      note: "Automated build using nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04 for ARM64 architecture."
+      draft: false
+
+trigger:
+  event:
+    - tag
+
+when:
+  ref:
+    include:
+      - refs/tags/*
